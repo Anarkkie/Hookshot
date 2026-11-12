@@ -467,7 +467,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   0 for none, down to -3).
 - **NVIDIA Reflex** Off is the game as without it. `RX_VK_REFLEX_LOG=1` logs the driver's latency timings every 300
   frames while it is on.
-- **AMD Anti-Lag 2** Off is the game as without it. Like Reflex, it is not used while Frame generation is on.
+- **AMD Anti-Lag 2** Off is the game as without it. It works with Frame generation too: each game frame's present
+  stage is given when that frame itself is shown, not at the made frames before it.
 - **Profile** runs the game as the console docked (at the Output resolution) or Handheld (1536x864): lighter on the GPU.
 - **V-Sync:** Auto is mailbox where the driver has it (no tearing, no wait for the display); otherwise On, or on Windows
   Off. On waits for each refresh (FIFO): no tearing, at most the display's rate. Off shows each frame at once and can
