@@ -103,6 +103,9 @@ class PipelineCacheSaveTests(unittest.TestCase):
     def test_forced_wait_preserves_existing_single_waiter_behavior(self):
         self.check_case('forced-wait')
 
+    def test_busy_save_keeps_new_work_pending(self):
+        self.check_case('busy-pending')
+
     def test_unchanged_data_is_not_written_again(self):
         # The precompile's pipelines, all found in the cache, count towards a save: data of the size read or last written
         # is not fetched nor written again; a write that did not land is tried again.

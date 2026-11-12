@@ -116,7 +116,16 @@ int save_replace(const char* from, const char* to, unsigned flags) {
 // The play generations' part of a save (gpu/vk/vk_draw.cpp, tests/test_pipeline_play_cache.py): at each save, after the
 // cache's own part, whatever that did.
 std::atomic<int> play_saves{0};
-void play_cache_save() { ++play_saves; }
+std::atomic<bool> block_play_save{false}, allow_play_save{false};
+std::atomic<int> play_save_blocked{0};
+void play_cache_save() {
+    ++play_saves;
+    if (block_play_save) {
+        // The generation is already taken; hold its write while newer work arrives.
+        ++play_save_blocked;
+        while (!allow_play_save.load()) Sleep(1);
+    }
+}
 std::atomic<bool> in_play{false};
 bool play_cache_in_use() { return in_play.load(); }
 
@@ -264,6 +273,26 @@ int run(const std::string& name) {
         allow_copy = true;
         waiter.join();
         CHECK(waited && finished && queries == 2 && replacements == 2 && new_file());
+    } else if (name == "busy-pending") {
+        block_play_save = true;
+        pipeline_cache_save(false);
+        CHECK(wait_until(play_save_blocked, 1));
+        cache_size = 96;
+        pcache_built_since_save += 32;  // New pipelines after the active save took its generation.
+        pipeline_cache_save(false);   // Cannot start while the first writer owns the save.
+        const auto pending = pcache_built_since_save.load();
+        allow_play_save = true;
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (play_saves < 2 && std::chrono::steady_clock::now() < end) {
+            pipeline_cache_save(false);  // The periodic caller retries; no further pipelines arrive.
+            Sleep(1);
+        }
+        const bool retried = play_saves >= 2;
+        pipeline_cache_save(true);  // Join any remaining writer before the child exits, even on failure.
+        std::printf("busy-pending: pending=%lld retried=%d\n", (long long)pending, int(retried));
+        CHECK(pending == 32 && retried);
+        CHECK(copies == 2 && replacements == 2 && pcache_saved_size == 96 && new_file());
+        CHECK(save_errors == 0 && start_errors == 0);
     } else if (name == "unchanged") {
         pcache_saved_size = 64;  // As pcache_init leaves it: the driver's size for the data read from the file.
         pipeline_cache_save(true);  // At exit, nothing taken in.

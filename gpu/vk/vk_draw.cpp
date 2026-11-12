@@ -9674,7 +9674,6 @@ void pipeline_cache_save_play() {
 
 void pipeline_cache_save(bool force) {
     if (!pcache || pcache_no_save || (!force && pcache_built_since_save < 32)) return;
-    pcache_built_since_save = 0;
     // (on a thread of its own unless forced, at exit: ~100 MB fetched and written took the replay thread 100+ ms at
     // each scene change; the cache is internally synchronized, pipelines go on being built meanwhile)
     static std::atomic<bool> busy{false};
@@ -9683,6 +9682,8 @@ void pipeline_cache_save(bool force) {
         while (busy.load()) Sleep(1);   // (the one under way, then this one)
         busy = true;
     }
+    // A request skipped behind a busy writer must leave newer work pending for the next save.
+    pcache_built_since_save = 0;
     auto save = [force] {
         struct Done { ~Done() { busy = false; } } done;
         try {
