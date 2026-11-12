@@ -135,6 +135,8 @@ int main() {
 WINDOWS_FIXTURE = r"""
 #define NOMINMAX
 #include <cassert>
+#include <chrono>
+#include <future>
 #include "file_select_store.h"
 
 using namespace file_select;
@@ -150,9 +152,44 @@ std::string read(const fs::path& root) {
     return {bytes.begin(), bytes.end()};
 }
 
+std::wstring event_name(const wchar_t* suffix) {
+    wchar_t prefix[128]{};
+    assert(GetEnvironmentVariableW(L"HOOKSHOT_FILE_SELECT_TEST_EVENT", prefix, 128));
+    return std::wstring(prefix) + suffix;
+}
+
 int main(int argc, char** argv) {
     const Store store(fs::current_path());
+    if (argc == 3 && std::string(argv[1]) == "--replacement") {
+        // The inherited handle lets this child prove that the original game has
+        // exited before telling the test to check whether File Select still waits.
+        Handle original(reinterpret_cast<HANDLE>(std::stoull(argv[2])));
+        assert(WaitForSingleObject(original.value, 10000) == WAIT_OBJECT_0);
+        Handle ready(OpenEventW(EVENT_MODIFY_STATE, FALSE, event_name(L"Ready").c_str()));
+        Handle release(OpenEventW(SYNCHRONIZE, FALSE, event_name(L"Release").c_str()));
+        assert(ready.value && release.value);
+        assert(SetEvent(ready.value));
+        assert(WaitForSingleObject(release.value, 10000) == WAIT_OBJECT_0);
+        save(store.mount, "written by replacement game");
+        return 0;
+    }
     if (argc == 1) {
+        std::string mode;
+        std::ifstream(store.root / "game-mode.txt") >> mode;
+        if (mode == "fail") return 7;
+        if (mode == "restart") {
+            Handle original(OpenProcess(SYNCHRONIZE, TRUE, GetCurrentProcessId()));
+            assert(original.value);
+            auto command = L"\"" + store.game.wstring() + L"\" --replacement " +
+                std::to_wstring(reinterpret_cast<uintptr_t>(original.value));
+            STARTUPINFOW startup{};
+            startup.cb = sizeof(startup);
+            PROCESS_INFORMATION process{};
+            assert(CreateProcessW(store.game.c_str(), command.data(), nullptr, nullptr, TRUE, 0,
+                                  nullptr, store.root.c_str(), &startup, &process));
+            Handle child(process.hProcess), thread(process.hThread);
+            return 0;
+        }
         save(store.mount, "written by game");
         return 0;
     }
@@ -184,6 +221,42 @@ int main(int argc, char** argv) {
     assert(!fs::exists(stage));
     assert(fixture.play(5, false) == 0);
     assert(fixture.active() == 5 && read(fixture.profile(5)) == "written by game");
+    assert(read(fixture.profile(1)) == "original" && read(legacy / "file1") == "original");
+
+    // A restart replaces the process, not the selected file or shared game root.
+    const auto prefix = L"Local\\HookshotFileSelectTest" + std::to_wstring(GetCurrentProcessId());
+    assert(SetEnvironmentVariableW(L"HOOKSHOT_FILE_SELECT_TEST_EVENT", prefix.c_str()));
+    Handle ready(CreateEventW(nullptr, TRUE, FALSE, event_name(L"Ready").c_str()));
+    Handle release(CreateEventW(nullptr, TRUE, FALSE, event_name(L"Release").c_str()));
+    assert(ready.value && release.value);
+    std::ofstream(fixture.root / "game-mode.txt") << "restart";
+    auto playing = std::async(std::launch::async, [&] { return fixture.play(5, false); });
+    const bool replacement_started = WaitForSingleObject(ready.value, 10000) == WAIT_OBJECT_0;
+    const bool waited = playing.wait_for(std::chrono::milliseconds(300)) == std::future_status::timeout;
+    assert(SetEvent(release.value));
+    const auto code = playing.get();
+    assert(replacement_started && waited && code == 0);
+    assert(read(fixture.profile(5)) == "written by replacement game");
+    assert(read(fixture.mount) == "written by replacement game");
+    Store reopened(fixture.root);
+    reopened.recover();
+    assert(reopened.active() == 5 && read(reopened.profile(1)) == "original");
+
+    // A fresh game that exits before writing a save must restore the previous
+    // mount and leave the existing file being reset intact.
+    std::ofstream(fixture.root / "game-mode.txt") << "fail";
+    assert(fixture.play(1, true) == 7);
+    assert(fixture.active() == 5 && read(fixture.mount) == "written by replacement game");
+    assert(read(fixture.profile(1)) == "original");
+
+    // CreateProcess failure after a profile switch must roll that switch back.
+    fs::rename(fixture.game, fixture.game.parent_path() / "valid-game.exe");
+    std::ofstream(fixture.game) << "not an executable";
+    bool failed = false;
+    try { fixture.play(1, false); }
+    catch (const std::system_error&) { failed = true; }
+    assert(failed && fixture.active() == 5);
+    assert(read(fixture.mount) == "written by replacement game");
     assert(read(fixture.profile(1)) == "original" && read(legacy / "file1") == "original");
 }
 """
@@ -229,8 +302,8 @@ def main():
             subprocess.run([args.cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror",
                             "-I", str(ROOT / "builder/setup"), str(source), "-o", str(binary)],
                            check=True, timeout=60)
-            subprocess.run([str(binary), str(binary)], cwd=directory, check=True, timeout=20)
-    print("File Select preview and build markers passed, plus save recovery on Windows.")
+            subprocess.run([str(binary), str(binary)], cwd=directory, check=True, timeout=40)
+    print("File Select preview and build markers passed, plus save recovery, restart and launch failures on Windows.")
 
 
 if __name__ == "__main__":
