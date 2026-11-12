@@ -488,7 +488,7 @@ void program_cache_read(FILE* in, std::mutex* mu, uint64_t key, const std::vecto
         get_head(r, *p);
         p->variant = answers_hash(*p);
         const uint64_t n = r.count(1);
-        bool ok = !r.bad && n <= 8;   // (a program has at most a few stages)
+        bool ok = !r.bad && n > 0 && n <= 8;   // (a usable program has at least one stage, at most a few)
         for (uint64_t k = 0; ok && k < n; k++) {
             p->stages.emplace_back();
             Stage& st = p->stages.back();

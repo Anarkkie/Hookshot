@@ -101,6 +101,15 @@ class CacheModuleCleanupTests(unittest.TestCase):
     def test_valid_record_retains_modules(self):
         self.run_case('valid')
 
+    def test_graphics_record_without_stages_refused(self):
+        self.run_case('no_stages')
+
+    def test_compute_record_without_stages_refused(self):
+        self.run_case('no_stages_compute')
+
+    def test_stage_less_record_does_not_block_valid_records(self):
+        self.run_case('no_stages_mixed')
+
     def test_compressed_record_round_trip(self):
         self.run_case('compressed')
 

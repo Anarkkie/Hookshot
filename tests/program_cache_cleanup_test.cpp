@@ -152,23 +152,35 @@ void release_accepted(std::vector<std::unique_ptr<Program>>& programs) {
     }
     programs.clear();
 }
+void save_without_stages(uint64_t key, bool compute) {
+    // Authored invalid record: its head and lengths fit, but no pipeline can use it.
+    Program program;
+    program.key = key;
+    program.compute = compute;
+    program_cache_save(program, {});
+    CHECK(disk_records.at(key).size() == 1);
+}
 int main(int argc, char** argv) {
     CHECK(argc == 2);
     disk_in = disk_out = std::tmpfile();
     CHECK(disk_in);
     const std::string scenario = argv[1];
     disk_zstd = scenario == "compressed";
-    save(7, scenario == "empty", scenario == "answer_stage" ? 1 : scenario == "answer_desc" ? 2 : 0);
+    const bool no_stages = scenario == "no_stages" || scenario == "no_stages_compute" || scenario == "no_stages_mixed";
+    if (no_stages) save_without_stages(7, scenario == "no_stages_compute");
+    else save(7, scenario == "empty", scenario == "answer_stage" ? 1 : scenario == "answer_desc" ? 2 : 0);
     if (scenario == "first") fail_at = 1;
     if (scenario == "second" || scenario == "mixed") fail_at = 2;
     if (scenario == "truncated") --disk_records.at(7).back().size;
-    if (scenario == "mixed") {
+    if (scenario == "mixed" || scenario == "no_stages_mixed") {
         save(7); // A valid variant after the failing variant, under the same key.
         save(9); // An independent key must also remain usable.
     }
     std::vector<std::unique_ptr<Program>> programs;
     program_cache_load(7, programs);
-    unsigned accepted = scenario == "valid" || scenario == "mixed" || scenario == "compressed" ? 1 : 0;
+    unsigned accepted = scenario == "valid" || scenario == "mixed" || scenario == "compressed" || scenario == "no_stages_mixed" ? 1 : 0;
+    std::printf("%s: loaded=%zu expected=%u cache_hits=%lld\n", scenario.c_str(), programs.size(), accepted,
+                (long long)st_cache_hits.load());
     CHECK(programs.size() == accepted && st_cache_hits == accepted);
     std::printf("%s: created=%u destroyed=%u accepted_modules=%u\n", scenario.c_str(), created, releases, accepted * 2);
     CHECK(created - releases == accepted * 2);
@@ -178,6 +190,14 @@ int main(int argc, char** argv) {
     if (scenario == "answer_stage" || scenario == "answer_desc") CHECK(created == 2 && releases == 2);
     if (scenario == "valid") CHECK(created == 2 && releases == 0);
     if (scenario == "compressed") CHECK(created == 2 && releases == 0);
+    if (scenario == "no_stages" || scenario == "no_stages_compute") CHECK(created == 0 && releases == 0);
+    if (scenario == "no_stages_mixed") {
+        CHECK(created == 2 && releases == 0);
+        program_cache_load(9, programs);
+        CHECK(programs.size() == 2 && st_cache_hits == 2 && created == 4 && releases == 0);
+        program_cache_load(7, programs);
+        CHECK(programs.size() == 2 && st_cache_hits == 2 && created == 4 && releases == 0);
+    }
     if (scenario == "mixed") {
         CHECK(created == 3 && releases == 1);
         program_cache_load(9, programs);
