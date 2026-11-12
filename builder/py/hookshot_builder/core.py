@@ -1,6 +1,7 @@
 """What the WPF builder's Runner.cs, Storage.cs, Finder.cs and BuildWorkers.cs do, the same rules: the build tools, nx2/make_game.py as a
 child process, what the builder keeps on the PC, the game files found on it, and the game's shortcuts."""
 import ctypes
+import io
 import json
 import os
 import shutil
@@ -86,7 +87,8 @@ def build_env(tools, workers=None, ngx_sdk=None):
 
 
 def build_command(tools, args):
-    return [tools.python, *tools.python_args, "-I", os.path.join(tools.root, "nx2", "make_game.py"), *args]
+    # -I ignores PYTHONIOENCODING; pass UTF-8 mode explicitly for captured output.
+    return [tools.python, *tools.python_args, "-I", "-X", "utf8", os.path.join(tools.root, "nx2", "make_game.py"), *args]
 
 
 class Runner:
@@ -137,27 +139,48 @@ class Runner:
 def check(tools, args):
     """Is this the supported game and version? (ok, the answer in plain words)"""
     try:
-        p = subprocess.run(build_command(tools, args), cwd=tools.root, env=build_env(tools), capture_output=True,
-                           stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+        p = subprocess.Popen(build_command(tools, args), cwd=tools.root, env=build_env(tools), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
     except OSError:
         if own_python_missing(tools):
             return False, OWN_PYTHON_MISSING
         return False, "Python 3 was not found. Install it from python.org (not the Microsoft Store build)."
+    diagnostics, omitted = "", False
+
+    def errors():
+        # Drain alongside stdout. Fixed-size reads also bound a single enormous
+        # line, while TextIOWrapper decodes UTF-8 split across reads correctly.
+        nonlocal diagnostics, omitted
+        with io.TextIOWrapper(p.stderr, encoding="utf-8", errors="replace") as stream:
+            while chunk := stream.read(4096):
+                diagnostics += chunk
+                if len(diagnostics) > 16 * 1024:
+                    diagnostics = diagnostics[-16 * 1024:]
+                    omitted = True
+
     result, answered = (False, "The game files could not be read."), False
-    for line in p.stdout.decode("utf-8", "replace").splitlines():
-        if line.startswith("@@check ok "):
-            result, answered = (True, line[11:]), True
-        elif line.startswith("@@check bad "):
-            result, answered = (False, line[12:]), True
-        elif line.startswith("@@error "):
-            result, answered = (False, line[8:]), True
+    with p:
+        reader = threading.Thread(target=errors)
+        reader.start()
+        for raw in p.stdout:
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            if line.startswith("@@check ok "):
+                result, answered = (True, line[11:]), True
+            elif line.startswith("@@check bad "):
+                result, answered = (False, line[12:]), True
+            elif line.startswith("@@error "):
+                result, answered = (False, line[8:]), True
+        reader.join()
+        p.wait()
     if not answered:
-        errs = [l for l in p.stderr.decode("utf-8", "replace").splitlines() if l.strip()]
-        last = errs[-1] if errs else None
+        diagnostics = diagnostics.strip()
+        last = diagnostics.rsplit("\n", 1)[-1]
         if last and "microsoft store" in last.lower():
             return False, ("Python 3 was not found: the 'python' command on this PC is the Microsoft Store shortcut, which only opens "
                            "the Store. Install Python 3 from python.org (not the Store version).")
-        return False, last or "The game tools stopped without saying why (exit code %d)." % p.returncode
+        if diagnostics:
+            return False, ("[earlier stderr omitted]\n" if omitted else "") + diagnostics
+        return False, "The game tools stopped without saying why (exit code %d)." % p.returncode
     return result
 
 

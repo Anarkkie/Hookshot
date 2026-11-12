@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 
 namespace HookshotBuilder;
 
@@ -109,6 +110,8 @@ sealed class Runner
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         si.Environment["PYTHONIOENCODING"] = "utf-8";
         BuildWorkers.Apply(si, workers);
@@ -131,6 +134,9 @@ sealed class Runner
         }
         foreach (var a in tools.PythonArgs ?? Array.Empty<string>()) si.ArgumentList.Add(a);
         si.ArgumentList.Add("-I");
+        // -I ignores PYTHONIOENCODING; the captured UTF-8 traceback needs an explicit mode.
+        si.ArgumentList.Add("-X");
+        si.ArgumentList.Add("utf8");
         si.ArgumentList.Add(Path.Combine(tools.Root, "nx2", "make_game.py"));
         foreach (var a in args) si.ArgumentList.Add(a);
         return si;
@@ -168,15 +174,35 @@ sealed class Runner
         try { process?.Kill(entireProcessTree: true); } catch (Exception) { }
     }
 
+    // Keep the end of a failed check (including its traceback), without holding
+    // unbounded output or waiting for a newline from a noisy child process.
+    static async Task<string> CheckErrors(StreamReader stream)
+    {
+        const int limit = 16 * 1024;
+        var tail = new StringBuilder();
+        var buffer = new char[4096];
+        var omitted = false;
+        int count;
+        while ((count = await stream.ReadAsync(buffer, 0, buffer.Length)) != 0)
+        {
+            tail.Append(buffer, 0, count);
+            if (tail.Length > limit)
+            {
+                tail.Remove(0, tail.Length - limit);
+                omitted = true;
+            }
+        }
+        var text = tail.ToString().Trim();
+        return text.Length == 0 ? "" : (omitted ? "[earlier stderr omitted]\n" : "") + text;
+    }
+
     /// Is this the supported game and version? The answer in plain words.
     public static async Task<(bool Ok, string Text)> Check(Tools tools, IEnumerable<string> args)
     {
         try
         {
             using var p = Process.Start(Info(tools, args))!;
-            string? lastError = null;
-            p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) lastError = e.Data; };
-            p.BeginErrorReadLine();
+            var errors = CheckErrors(p.StandardError);
             var result = (false, "The game files could not be read.");
             var answered = false;
             while (await p.StandardOutput.ReadLineAsync() is { } line)
@@ -186,13 +212,17 @@ sealed class Runner
                 else if (line.StartsWith("@@error ")) { result = (false, line[8..]); answered = true; }
             }
             await p.WaitForExitAsync();
-            // (a step that stopped before it could say why: the reason is on stderr, which used to be dropped here)
+            var diagnostics = await errors;
+            // A check can fail before it emits @@check: keep the traceback's
+            // file and line, not just its final exception (issue 2730).
             if (!answered)
             {
-                if (lastError != null && lastError.Contains("Microsoft Store", StringComparison.OrdinalIgnoreCase))
+                var lastError = diagnostics[(diagnostics.LastIndexOf('\n') + 1)..];
+                if (lastError.Contains("Microsoft Store", StringComparison.OrdinalIgnoreCase))
                     return (false, "Python 3 was not found: the 'python' command on this PC is the Microsoft Store shortcut, which only opens " +
                                    "the Store. Install Python 3 from python.org (not the Store version), or use the full Hookshot Builder package.");
-                return (false, lastError ?? "The game tools stopped without saying why (exit code " + p.ExitCode + ").");
+                return (false, diagnostics.Length != 0 ? diagnostics :
+                    "The game tools stopped without saying why (exit code " + p.ExitCode + ").");
             }
             return result;
         }
