@@ -9,7 +9,8 @@
        tag <tag>
        part <sha256> <bytes> <folder under the install> <top folder in the zip to rename, or -> <new name, or -> <url>
        run <the builder, relative to the install>
-   Build: clang -O2 -mwindows -municode setup.c setup_rc.o -lwinhttp -lbcrypt -lcomctl32 -lshell32 -lole32 -o HookshotBuilder-Setup.exe */
+   Build: compile this file as C, then link it with file_select.cpp and setup_rc.o as C++17.
+   The complete llvm-mingw commands and Windows libraries are in .github/workflows/windows-builder.yml. */
 #define WIN32_LEAN_AND_MEAN
 #ifndef UNICODE
 #define UNICODE
@@ -25,6 +26,7 @@
 #include <string.h>
 #include <wchar.h>
 #include "portable_home.h"
+#include "file_select.h"
 
 #define WM_STATUS (WM_APP + 1)
 #define WM_DONE (WM_APP + 2)
@@ -118,7 +120,8 @@ static int home_path(wchar_t *out, const wchar_t *format, ...) {
 /* ---- HTTPS GET into a sink, following redirects (GitHub's release links go to its download host) ---- */
 typedef int (*Sink)(void *user, const void *data, DWORD n);
 
-static int http_get(const char *url8, Sink sink, void *user, unsigned long long expect, const wchar_t *accept) {
+static int http_get_with_timeout(const char *url8, Sink sink, void *user, unsigned long long expect,
+                                 const wchar_t *accept, int timeout) {
     wchar_t url[1024];
     MultiByteToWideChar(CP_UTF8, 0, url8, -1, url, 1024);
     URL_COMPONENTS uc = {sizeof uc};
@@ -130,8 +133,8 @@ static int http_get(const char *url8, Sink sink, void *user, unsigned long long 
     if (!s) s = WinHttpOpen(L"HookshotBuilder-Setup/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (!s) return 0;
     /* (a stalled download fails after a minute without data, with the message, instead of waiting forever: a GitHub 504 hour) */
-    WinHttpSetTimeouts(s, 30000, 30000, 30000, 60000);
-    DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;   /* (a redirect never drops to clear text) */
+    WinHttpSetTimeouts(s, timeout, timeout, timeout, timeout * 2);
+    DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(s, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof policy);
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     LPCWSTR types[2] = {accept, NULL};
@@ -162,6 +165,10 @@ static int http_get(const char *url8, Sink sink, void *user, unsigned long long 
     if (c) WinHttpCloseHandle(c);
     WinHttpCloseHandle(s);
     return ok;
+}
+
+static int http_get(const char *url8, Sink sink, void *user, unsigned long long expect, const wchar_t *accept) {
+    return http_get_with_timeout(url8, sink, user, expect, accept, 30000);
 }
 
 typedef struct { char *p; size_t n, cap; } Mem;
@@ -532,6 +539,16 @@ static int json_string_after(const char *p, const char *end, char *out, int n) {
     if (p >= end) return 0;
     out[i] = 0;
     return 1;
+}
+
+int hookshot_file_select_latest(char *tag, int length) {
+    Mem release = {0};
+    const int ok = http_get_with_timeout("https://api.github.com/repos/NotRexed/Hookshot/releases/latest",
+                                         mem_sink, &release, 0, L"application/vnd.github+json", 4000);
+    const char *name = ok && release.p ? strstr(release.p, "\"tag_name\"") : NULL;
+    const int found = name && json_string_after(name + 10, release.p + release.n, tag, length);
+    free(release.p);
+    return found;
 }
 
 /* The API link of the asset called name in a release's JSON (in an asset object its own "url" comes before its "name") */
@@ -985,34 +1002,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
         while (*c == L' ') c++;
         if (!wcsncmp(c, L"--play", 6) && (c[6] == L' ' || !c[6])) return play_folder(c + 6);
         if (!wcsncmp(c, L"--cli", 5) && (c[5] == L' ' || !c[5])) g_headless = 1, show = SW_HIDE;
+        wchar_t self[32768];
+        const DWORD length = GetModuleFileNameW(NULL, self, sizeof self / sizeof *self);
+        wchar_t *slash = length && length < sizeof self / sizeof *self ? wcsrchr(self, L'\\') : NULL;
+        if (slash && !_wcsicmp(slash + 1, L"hookshot.exe") &&
+            (hookshot_file_select_command(c) || !wcsstr(c, L"--"))) {
+            *slash = 0;
+            return hookshot_file_select(inst, self, hookshot_file_select_command(c) ? c : L"", show);
+        }
     }
     g_home_ok = init_home(portable);
-    {
-        wchar_t self[MAX_PATH];
-        GetModuleFileNameW(NULL, self, MAX_PATH);
-        const wchar_t *name = wcsrchr(self, L'\\');
-        name = name ? name + 1 : self;
-        if (!_wcsicmp(name, L"hookshot.exe") && !wcsstr(g_cmdline, L"--")) {   /* (the game folder's launcher) */
-            wchar_t *slash = wcsrchr(self, L'\\');
-            if (slash) *slash = 0;
-            swprintf(g_cmdline, 2047, L"--launch \"%ls\"", self);
-            if (launch_installed(g_cmdline)) return 0;
-            /* (no builder installed on this PC: the game itself, at once; nothing is downloaded to show a Play button) */
-            wchar_t game[MAX_PATH], cmd[MAX_PATH + 4];
-            home_path(game, L"%ls\\bin\\hookshot.exe", self);
-            swprintf(cmd, MAX_PATH + 4, L"\"%ls\"", game);
-            STARTUPINFOW si = {sizeof si};
-            PROCESS_INFORMATION pi;
-            if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, self, &si, &pi)) {
-                CloseHandle(pi.hThread), CloseHandle(pi.hProcess);
-                return 0;
-            }
-            MessageBoxW(NULL, L"The game (bin\\hookshot.exe) is missing from this folder. Build it again with the Hookshot Builder.", L"Hookshot",
-                        MB_ICONERROR);
-            return 1;
-        }
-        if (wcsstr(g_cmdline, L"--launch") && launch_installed(g_cmdline)) return 0;
-    }
+    if (wcsstr(g_cmdline, L"--launch") && launch_installed(g_cmdline)) return 0;
     if (!g_home_ok) {
         const wchar_t *why = L"The Builder home is unavailable or its portable marker is invalid. For a new portable install, put this setup in a writable folder and start it with --portable.";
         if (g_headless) say_error(why);

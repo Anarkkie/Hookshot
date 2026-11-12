@@ -134,9 +134,11 @@ jobs:
           release=
           if [[ -z $RELEASE_TAG ]]; then release=nightly; elif [[ $RELEASE_TAG == *-* ]]; then release=$RELEASE_TAG; fi
           "$LLVM_MINGW/bin/x86_64-w64-mingw32-windres" setup.rc -O coff -o "$RUNNER_TEMP/setup_rc.o"
-          "$LLVM_MINGW/bin/x86_64-w64-mingw32-clang" -O2 -mwindows -municode ${release:+"-DHOOKSHOT_SETUP_RELEASE=\"$release\""} \
-            setup.c "$RUNNER_TEMP/setup_rc.o" \
-            -lwinhttp -lbcrypt -lcomctl32 -lshell32 -lole32 -Wl,--dependent-load-flag=0x800 \
+          "$LLVM_MINGW/bin/x86_64-w64-mingw32-clang" -O2 ${release:+"-DHOOKSHOT_SETUP_RELEASE=\"$release\""} \
+            -c setup.c -o "$RUNNER_TEMP/setup.o"
+          "$LLVM_MINGW/bin/x86_64-w64-mingw32-clang++" -std=c++17 -O2 -mwindows -municode -static \
+            "$RUNNER_TEMP/setup.o" file_select.cpp "$RUNNER_TEMP/setup_rc.o" \
+            -lwinhttp -lbcrypt -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdiplus -lgdi32 -Wl,--dependent-load-flag=0x800 \
             -o "$RUNNER_TEMP/HookshotBuilder-Setup.exe"
           ls -l "$RUNNER_TEMP/HookshotBuilder-Setup.exe"
 

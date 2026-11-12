@@ -1856,6 +1856,34 @@ def write_game_home(out, relative):
             os.remove(partial)
 
 
+def setup_has_file_select(launcher):
+    if not launcher:
+        return False
+    with open(launcher, "rb") as f:
+        return "Hookshot File Select v1".encode("utf-16le") in f.read()
+
+
+def write_installed_version(out, tag, file_select, portable_home):
+    """An untagged rebuild must replace the previous release's installed version."""
+    destination = os.path.join(out, "hookshot_version.txt")
+    fd, partial = tempfile.mkstemp(prefix=".hookshot-version-", dir=out)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write("version=%s\n" % (tag or "development"))
+            if file_select:
+                f.write("file_select=1\n")
+            if portable_home is not None:
+                f.write("builder_local=1\n")
+            elif os.environ.get("HOOKSHOT_BUILDER_EXE"):
+                f.write("builder=%s\n" % os.environ["HOOKSHOT_BUILDER_EXE"])
+                if os.environ.get("HOOKSHOT_BUILDER_ARGS"):
+                    f.write("builder_args=%s\n" % os.environ["HOOKSHOT_BUILDER_ARGS"])
+        os.replace(partial, destination)
+    finally:
+        if os.path.exists(partial):
+            os.remove(partial)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--nup")
@@ -2269,9 +2297,8 @@ def main(a=None):
     built = os.path.join(work, "sa", "build")
     # (the new files are copied in beside the old ones as <name>.new and swapped in only once all are complete: a build stopped while
     # copying, or a full disk, left a half-written 460 MB hookshot.exe and no game to play. The old game stays playable until the swap)
-    # (Windows) hookshot.exe in the folder is the game's launcher: the builder's small setup, which opens the installed builder as a
-    # launcher for this folder (Play, and Update left of it when a newer release is out: builder/setup/setup.c launch mode), or starts
-    # the game when no builder is installed. The game and its DLLs are in bin\; its files (image.bin, romfs, saves, settings, caches)
+    # (Windows) hookshot.exe in the folder opens File Select (builder/setup/setup.c launch mode).
+    # The game and its DLLs are in bin\; its files (image.bin, romfs, saves, settings, caches)
     # stay in the folder (host/hos_paths.h). Without the setup (a development build) the game stays hookshot.exe in the folder
     staged = []
     # (Linux) the same launcher, as a script, when this is a packaged builder (the AppImage sets HOOKSHOT_TOOLS). A source
@@ -2282,6 +2309,7 @@ def main(a=None):
         launcher = script if os.environ.get("HOOKSHOT_TOOLS") and os.path.isfile(script) else None
     else:
         launcher = launcher if os.path.isfile(launcher) else None
+    file_select = not LINUX and setup_has_file_select(launcher)
     game_dir = os.path.join(out, "bin") if launcher else out
     os.makedirs(game_dir, exist_ok=True)
     ffmpeg_dlls = [] if LINUX else sorted(f for f in os.listdir(built) if f.endswith(".dll") and f.startswith(("av", "sw")))
@@ -2342,6 +2370,12 @@ def main(a=None):
              ([] if launcher else ["--incremental"]), check=False, output=sys.stderr):
         print("the button prompts of other controllers were not made: the game shows its own", flush=True)
         shutil.rmtree(prompts, ignore_errors=True)
+    if file_select and run(
+        PY + [os.path.join(HERE, "prompt_assets.py"), "--romfs", romfs,
+              "--out", os.path.join(game_dir, "file-select-art"), "--file-select-art"],
+        check=False, output=sys.stderr,
+    ):
+        print("the File Select art was not made: File Select can show item names", flush=True)
     icon = os.path.join(ROOT, "assets", "hookshot.png")
     if LINUX and os.path.exists(icon):   # (the window's icon: host/posix/display_sdl.c)
         copy_writable(icon, os.path.join(out, "hookshot.png"))   # (a second build overwrites the first's)
@@ -2360,17 +2394,8 @@ def main(a=None):
                 tag = f.readline().strip()
             if tag:
                 break
-    if tag:
-        write_game_home(out, portable_home)
-        with open(os.path.join(out, "hookshot_version.txt"), "w", encoding="utf-8", newline="\n") as f:
-            f.write("version=%s\n" % tag)
-            if portable_home is not None:
-                f.write("builder_local=1\n")
-            elif os.environ.get("HOOKSHOT_BUILDER_EXE"):
-                f.write("builder=%s\n" % os.environ["HOOKSHOT_BUILDER_EXE"])
-                # (the Python builder: builder is its pythonw.exe, and these the arguments before --update, host/hos_update.c)
-                if os.environ.get("HOOKSHOT_BUILDER_ARGS"):
-                    f.write("builder_args=%s\n" % os.environ["HOOKSHOT_BUILDER_ARGS"])
+    write_game_home(out, portable_home)
+    write_installed_version(out, tag, file_select, portable_home)
     # (the game's code as read: written again by every build, so not left behind in the work folder. The translated code (sa\gen)
     # and the compiled objects stay: the next build skips the lift when nothing it reads changed (#428) and compiles only what
     # changed; the builder says how much stays and lets it go. Kept in a development checkout)

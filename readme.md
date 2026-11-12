@@ -68,7 +68,8 @@ the table says what works and what does not yet.
 ## Install and play
 
 The game does not come ready-made: Hookshot Builder builds it on your PC from your copy. You do this once. After that
-you start the game from its launcher, which also updates it.
+you start the game from its launcher. The Windows file selector links to official releases when an update is available;
+Hookshot Builder installs updates.
 
 ### What you need
 
@@ -103,8 +104,9 @@ For a portable install on an external SSD, run the downloaded setup with `--port
 6. When it says **Your game is ready**, press **Play**. The **Desktop shortcut** and **Start menu entry** boxes are
    ticked: untick them if you don't want them.
 
-Next time, start the game from the Hookshot shortcut, or `hookshot.exe` in the game folder. That is the launcher: it
-has **Play**, and **Update** when a newer release is out.
+Start from the Hookshot shortcut or `hookshot.exe` in the game folder. In **Select Your File**, choose a file and
+press **Start Game**. Use **New File** for another player and **Rename** to tell files apart. The launcher name is
+independent of the name in the game. [How File Select stores saves](docs/saves.md#windows-file-select).
 
 The first start prepares the game's shaders, which takes a while. Later starts are faster.
 
@@ -148,11 +150,13 @@ Do not run the game as root or make the device world-writable.
 
 ### Updating
 
-When a new release is out, the launcher says "Update available". Press **Update**: in `hookshot.exe` on Windows, or in
-`hookshot` (or the AppImage) on Linux. It downloads only the parts that changed and builds the game again in the same
-folder. The build files of the last build are gone by then (see [Where the files go](#where-the-files-go)), so an
-update takes about as long as the first build. Your saves and settings are kept. What changed is on the
-[Releases page](https://github.com/NotRexed/Hookshot/releases).
+On Windows, **Check for updates** in File Select compares the installed version with the latest stable release.
+If a newer release is available, it offers to open the official [Releases page](https://github.com/NotRexed/Hookshot/releases).
+On Linux, press **Update** in `hookshot` or the AppImage when the launcher offers it.
+
+Updating with Hookshot Builder downloads the parts that changed and builds the game again in the same folder.
+The build files of the last build are gone by then (see [Where the files go](#where-the-files-go)), so an update
+takes about as long as the first build. Your saves and settings are kept.
 
 <details>
 <summary>What an update keeps and replaces, and updating from the command line</summary>

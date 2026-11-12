@@ -22,6 +22,36 @@ slot_00/ ... slot_NN/ (one per save slot)
 
 Only the folder they are in differs.
 
+## Windows File Select
+
+The installed Windows `hookshot.exe` shows one preview per launcher file. File Select copies each file into
+the game's normal save location before starting `bin/hookshot.exe`. When you close the game, File Select copies
+the save back. The game still shows its own in-game name and slots. File Select keeps its names and copies
+in `user/file-select/` and the active game uses `user/save/`. Back up the whole `user` directory to keep all files.
+
+File Select reads the picture and location from the newest supported save snapshot. The fixed-size window groups
+items, equipment and quest status alongside hearts, unlocked magic, rupees, double defense and Link's age. Each group
+has its own pages; arrows, Home/End and Page Up/Page Down work while browsing its icons. Focus or hover shows the
+full item name.
+Counts show the saved quantity, including zero for an unlocked supply that has been used up. Names belong to the
+launcher and do not rename Link in the game.
+
+The preview summarizes acquired equipment rather than listing every historical save record. Normal green clothes
+appear once, using the saved age when available. Bags, quivers, wallets, scales, adult gauntlets and the Hookshot
+show their highest acquired upgrade. This does not claim which tier is currently equipped or a modified save's
+active capacity. Independent equipment, masks and learned songs remain separate.
+
+The local build extracts available 2D icons from that installation's RomFS and validates song fields against its save
+schema. Collectibles that the game presents as 3D models use text labels; learned songs use the game's ocarina image.
+Unsupported fields are omitted. The selector does not edit progress, unlock items or change Link's age.
+
+The pictures below use the native renderer offscreen. The first reads an existing save; the second uses authored
+test progress to check full groups and pagination. Their top labels are verification captions, outside the menu.
+
+![Windows File Select showing an existing save](images/windows-file-select.png)
+
+![Windows File Select with fully populated test progress](images/windows-file-select-full.png)
+
 ## Where the saves are
 
 | Program | Linux | Windows | How sure |

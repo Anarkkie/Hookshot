@@ -13,6 +13,7 @@ BEGIN
       VALUE "ProductName", "Hookshot Builder"
       VALUE "FileVersion", "1.0.0"
       VALUE "OriginalFilename", "HookshotBuilder-Setup.exe"
+      VALUE "FileSelectProtocol", "Hookshot File Select v1"
     END
   END
   BLOCK "VarFileInfo"

@@ -18,8 +18,8 @@ class Association(unittest.TestCase):
     def test_relocation_and_failures(self):
         source = ast.parse((ROOT / "nx2/make_game.py").read_text(encoding="utf-8"))
         nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and
-                 n.name in ("portable_game_home", "write_game_home")]
-        self.assertEqual(len(nodes), 2)
+                 n.name in ("portable_game_home", "write_game_home", "write_installed_version")]
+        self.assertEqual(len(nodes), 3)
         with tempfile.TemporaryDirectory(prefix="portable-game-") as folder:
             root = Path(folder)
             tree = root / "authored ü, tree"
@@ -40,8 +40,14 @@ class Association(unittest.TestCase):
                          any(isinstance(t, ast.Name) and t.id == "portable_home" for t in n.targets))
             version_loop = next(n for n in main_body if isinstance(n, ast.For) and
                                 isinstance(n.target, ast.Name) and n.target.id == "version_name")
-            publish = next(n for n in main_body if isinstance(n, ast.If) and
-                           isinstance(n.test, ast.Name) and n.test.id == "tag")
+            initial_tag = next(n for n in main_body if isinstance(n, ast.Assign) and
+                               any(isinstance(t, ast.Name) and t.id == "tag" for t in n.targets))
+            home_publish = next(n for n in main_body if isinstance(n, ast.Expr) and
+                                isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and
+                                n.value.func.id == "write_game_home")
+            version_publish = next(n for n in main_body if isinstance(n, ast.Expr) and
+                                   isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and
+                                   n.value.func.id == "write_installed_version")
             with patch.dict(os.environ, {"HOOKSHOT_SETUP_BASE": str(home), "HOOKSHOT_BUILDER_PORTABLE": "1"}):
                 relative = resolve(str(game))
                 self.assertFalse(ntpath.isabs(relative))
@@ -50,13 +56,23 @@ class Association(unittest.TestCase):
                 self.assertEqual(pointer.read_bytes(), relative.encode("utf-8"))
                 # Execute the actual early-main validation and final version-publication statements,
                 # including the call to write_game_home, without replacing that control flow.
-                (tools / "version.txt").write_text("v-authored")
+                tag_file = tools / "version.txt"
+                tag_file.write_text("v-authored")
                 pointer.unlink()
-                namespace.update(a=SimpleNamespace(check=False, update=None, out=str(game)), out=str(game), tag="")
-                exec(compile(ast.Module(body=[early, version_loop, publish], type_ignores=[]), "make_game.py", "exec"), namespace)
+                namespace.update(a=SimpleNamespace(check=False, update=None, out=str(game)), out=str(game),
+                                 tag="", file_select=False)
+                statements = ast.Module(body=[early, initial_tag, version_loop, home_publish, version_publish],
+                                        type_ignores=[])
+                exec(compile(statements, "make_game.py", "exec"), namespace)
                 self.assertEqual((game / "hookshot_version.txt").read_text(), "version=v-authored\nbuilder_local=1\n")
                 self.assertEqual(pointer.read_bytes(), relative.encode("utf-8"))
                 original = pointer.read_bytes()
+                tag_file.unlink()
+                pointer.unlink()
+                exec(compile(statements, "make_game.py", "exec"), namespace)
+                self.assertEqual((game / "hookshot_version.txt").read_text(), "version=development\nbuilder_local=1\n")
+                self.assertEqual(pointer.read_bytes(), original)
+                tag_file.write_text("v-authored")
                 for bad in (b"wrong", b"\xef\xbb\xbfHookshot Builder portable home v1", b"x" * 1000):
                     marker.write_bytes(bad)
                     with self.assertRaises(ValueError):
@@ -81,7 +97,6 @@ class Association(unittest.TestCase):
                 standard = str(root / "standard/HookshotBuilder.exe")
                 namespace.update(out=str(moved / "Game"),
                                  a=SimpleNamespace(check=False, update=None, out=str(moved / "Game")))
-                statements = ast.Module(body=[early, version_loop, publish], type_ignores=[])
                 with patch.dict(os.environ, {"HOOKSHOT_BUILDER_EXE": standard}):
                     exec(compile(statements, "make_game.py", "exec"), namespace)
                     self.assertEqual((moved / "Game/hookshot_version.txt").read_text(),

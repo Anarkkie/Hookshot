@@ -1201,6 +1201,41 @@ def generate(a):
         os.remove(path)
 
 
+def make_file_select_art(romfs, out):
+    """Extract the selector's art into a built game folder, from that game's own RomFS."""
+    # The native reader and local exporter share this catalog. No game art is shipped.
+    import re
+    with open(os.path.join(HERE, "file_select_items.inc"), encoding="utf-8") as catalog:
+        items = re.findall(r'^FILE_SELECT_ITEM\([^\n]*?, "([A-Za-z0-9_]+)"', catalog.read(), re.M)
+    items += ["Item_Bottle" + suffix for suffix in (
+        "", "_RedPotion", "_GreenPotion", "_BluePotion", "_BlueFire", "_Fish", "_Letter",
+        "_BigPoe", "_Poe", "_Bug", "_Fairy", "_Milk", "_HalfMilk")]
+    dictionary = zs_dictionary(romfs)
+    os.makedirs(out, exist_ok=True)
+
+    def export(data, texture, target):
+        info = bntx_textures(data).get(texture)
+        if not info or info[1] >> 8 != 0x2D:
+            return
+        image = decode(data, info)
+        box = image.getchannel("A").getbbox()
+        if box:
+            image = image.crop(box)
+        image.thumbnail((160, 160))
+        dest = os.path.join(out, target + ".png")
+        image.save(dest + ".new", format="PNG")
+        os.replace(dest + ".new", dest)
+
+    for name in items:
+        rel = f"UI/Tex/Icon/{name}.bntx.zs"
+        if os.path.isfile(os.path.join(romfs, rel)):
+            export(read_zs(romfs, rel, dictionary), name, name)
+    data = read_zs(romfs, TEXTURES, dictionary)
+    for name, target in (("HeartW_00_ASTC4x4", "heart"), ("HeartFrame_00", "empty-heart"),
+                         ("MpGaugeCenter_00", "magic"), ("CollectHeartPiece_03", "Obj_Heart_Piece")):
+        export(data, name, target)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--romfs", required=True)
@@ -1210,8 +1245,14 @@ def main():
     ap.add_argument("--dump", help="also write every face's images as PNG into <dir>/<face>/ (the names nx2/prompt_faces/<face>/ "
                     "takes in their place), and the game's textures they go into into <dir>/game/")
     ap.add_argument("--incremental", action="store_true", help="keep complete, unchanged output (source-checkout builds)")
+    ap.add_argument("--file-select-art", action="store_true", help="extract the Windows file selector's game art")
     a = ap.parse_args()
-    make_prompts(a, a.incremental and not a.dump)   # a layer dump is requested output too: always draw it
+    if a.file_select_art:
+        from file_select_metadata import generate as make_save_metadata
+        make_file_select_art(a.romfs, a.out)
+        make_save_metadata(a.romfs, os.path.join(a.out, "save-metadata.tsv"))
+    else:
+        make_prompts(a, a.incremental and not a.dump)   # a layer dump is requested output too: always draw it
 
 
 if __name__ == "__main__":

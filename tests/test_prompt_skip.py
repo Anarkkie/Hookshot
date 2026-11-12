@@ -57,6 +57,7 @@ class PromptSkipTests(unittest.TestCase):
         self.args = types.SimpleNamespace(romfs=str(self.romfs), out=str(self.out), faces=",".join(P.ALL_FACES),
                                           no_textures=False, dump=None)
         self.calls = 0
+        self.art_calls = []
         self.during = None
         self.packages = {name: ["authored-version", True] for name in getattr(P, "PROMPT_PACKAGES", {"PIL": "pillow"})}
         self.log = io.StringIO()
@@ -87,6 +88,9 @@ class PromptSkipTests(unittest.TestCase):
             self.during(out)
 
     def child(self, command, **kwargs):
+        if "--file-select-art" in command:
+            self.art_calls.append(Path(command[command.index("--out") + 1]))
+            return 0
         a = types.SimpleNamespace(**vars(self.args))
         a.out = command[command.index("--out") + 1]
         try:
@@ -98,8 +102,10 @@ class PromptSkipTests(unittest.TestCase):
             return 1   # a failed child, not an interruption of the builder itself
         return 0
 
-    def build(self, packaged=False):
-        env = dict(vars(M), romfs=str(self.romfs), out=str(self.out.parent), launcher="packaged launcher" if packaged else None)
+    def build(self, packaged=False, file_select=False):
+        env = dict(vars(M), romfs=str(self.romfs), out=str(self.out.parent),
+                   launcher="packaged launcher" if packaged else None,
+                   game_dir=str(self.out.parent / "bin"), file_select=file_select)
         exec(FINISH, env)
 
     def stamp(self):
@@ -110,6 +116,12 @@ class PromptSkipTests(unittest.TestCase):
         self.build()
         self.assertEqual(self.calls, 1, "unchanged finish must not draw the prompts twice")
         self.assertIn("prompts: unchanged, kept", self.log.getvalue())
+
+    def test_file_select_art_is_only_requested_for_a_capable_launcher(self):
+        self.build(packaged=True)
+        self.assertEqual(self.art_calls, [])
+        self.build(packaged=True, file_select=True)
+        self.assertEqual(self.art_calls, [self.out.parent / "bin" / "file-select-art"])
 
     def test_every_file_input_kind(self):
         paths = list(dict.fromkeys(self.source_files + self.game_files + self.font_files))
@@ -356,7 +368,7 @@ class PromptDependencyTests(unittest.TestCase):
                     [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
                 for module in modules:
                     if (SOURCE / (module.split(".")[0] + ".py")).is_file():
-                        self.assertIn(module, sources | {"kit"}, "new prompt dependency needs fingerprint coverage")
+                        self.assertIn(module, sources | {"kit", "file_select_metadata"}, "new prompt dependency needs fingerprint coverage")
         self.assertIn("SOURCE_DATE_EPOCH", P.PROMPT_ENV)
         self.assertIn("FREETYPE_PROPERTIES", P.PROMPT_ENV)
         self.assertIn("archspec", P.PROMPT_PACKAGES)

@@ -270,7 +270,17 @@ public partial class MainWindow : Window
     /// (the launcher already checked for updates: the game does not ask again)
     static void StartGame(string folder)
     {
-        var si = new ProcessStartInfo(GameExe(folder)) { UseShellExecute = false, WorkingDirectory = folder };
+        var game = GameExe(folder);
+        var launcher = System.IO.Path.Combine(folder, "hookshot.exe");
+        var version = System.IO.Path.Combine(folder, "hookshot_version.txt");
+        try
+        {
+            if (File.Exists(launcher) && File.Exists(version) && File.ReadLines(version).Contains("file_select=1"))
+                game = launcher;
+        }
+        catch (IOException) { /* An older or unavailable version marker leaves the original Play path. */ }
+        catch (UnauthorizedAccessException) { }
+        var si = new ProcessStartInfo(game) { UseShellExecute = false, WorkingDirectory = folder };
         si.Environment["HOOKSHOT_NO_UPDATE_CHECK"] = "1";
         Process.Start(si);
     }
