@@ -1036,7 +1036,7 @@ void cap_prewarm_class(uint64_t size) {
     }
 }
 bool cap_buf_get(uint64_t need, VkBuffer& buffer, VmaAllocation& alloc, void*& map, uint64_t& size) {
-    std::lock_guard lk(cap_free_mu);
+    std::unique_lock lk(cap_free_mu);
     if (cap_prewarm_on()) {
         static bool first = true;
         if (first) {   // (the first capture: the classes a load asks for)
@@ -1053,6 +1053,9 @@ bool cap_buf_get(uint64_t need, VkBuffer& buffer, VmaAllocation& alloc, void*& m
         cap_free.erase(cap_free.begin() + (ptrdiff_t)best);
         return map != nullptr;
     }
+    // (a cache miss can spend tens of ms allocating on the driver: the replay and prewarm workers must still be able to
+    // return finished buffers, and another capture to take them. Only the spare list and its accounting need this lock)
+    lk.unlock();
     size = cap_buf_size(need);
     map = nullptr;
     return create_buffer_cached(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, buffer, alloc, &map,
