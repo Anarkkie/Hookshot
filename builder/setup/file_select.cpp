@@ -283,7 +283,9 @@ struct Window {
 
     std::unique_ptr<Gdiplus::Image> art(const char* key) const {
         const auto png = store.root / L"bin" / L"file-select-art" / (std::string(key) + ".png");
-        std::unique_ptr<Gdiplus::Image> image(Gdiplus::Image::FromFile(png.c_str()));
+        // Builder can replace the art while this menu remains open. GDI+'s
+        // file loader holds the PNG open; retain detached pixels instead.
+        auto image = picture_from(read_bytes(png, 4u << 20));
         if (image && image->GetLastStatus() != Gdiplus::Ok) image.reset();
         return image;
     }
